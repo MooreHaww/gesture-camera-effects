@@ -154,9 +154,10 @@ SCENES = [(modes.PORTAL, "comic", 20, scene_portal),
 
 def render_scene(mode, style, frames, scene, base):
     players, renderer = Players(Config()), modes.ModeRenderer()
-    for i, obj in enumerate(renderer._stateful.values()):
-        if hasattr(obj, "rng"):
-            obj.rng = np.random.default_rng(10 + i)   # same picture every run
+    for i, obj in enumerate(renderer._stateful.values()):   # same picture every run
+        for j, part in enumerate([obj] + list(vars(obj).values())):
+            if hasattr(part, "rng"):
+                part.rng = np.random.default_rng(100 * i + j)
     out = base
     for f in range(frames):
         hands, clicked = scene(f)

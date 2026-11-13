@@ -1,4 +1,11 @@
-"""Main loop: camera -> tracking -> players -> mode -> overlay -> window."""
+"""Main loop: camera -> tracking -> players -> mode -> overlay -> window.
+
+Hand tracking runs on its own thread (tracking.TrackerThread). Each camera frame is
+handed to it, and the loop waits at most --track-wait ms for that frame's hands: a PC
+tracks in about 8 ms, so every frame gets its own hands exactly as before; a Raspberry
+Pi needs about 60 ms, so it does not wait, and players.HandPredictor carries the hands
+forward between results while the picture and effects keep the camera's frame rate.
+"""
 import sys
 import time
 import traceback
@@ -14,9 +21,9 @@ from .config import ROOT, Config, parse_args
 from .display import Display
 from .effects import STYLES
 from .photobooth import PhotoBooth
-from .players import Players
+from .players import HandPredictor, Players
 from .recorder import GifRecorder
-from .tracking import HandTracker
+from .tracking import HandTracker, TrackerThread
 from .ui import UI, NavView, UIState
 
 WINDOW = "Gesture Camera Effects"
@@ -48,7 +55,13 @@ def save_debug(frame, infos, canvas):
 
 def run(cfg: Config) -> int:
     cam = Camera(cfg.camera, cfg.width, cfg.height)
-    tracker = HandTracker(cfg.model_path, cfg.max_hands, cfg.square_pad)
+    tracker = TrackerThread(HandTracker(cfg.model_path, cfg.max_hands, cfg.square_pad))
+    predictor = HandPredictor()
+    used_seq = -1          # frame number of the last tracker result taken in
+    track_ms = 0.0
+    if cfg.pi:
+        print(f"Raspberry Pi profile: up to {cfg.max_hands} hands, lighter effects, "
+              f"tracking wait {cfg.track_wait_ms:g} ms (--no-pi turns it off)")
     display = None if cfg.no_display else Display(WINDOW, cam.size, cfg.kiosk)
     players = Players(cfg)
     btn_size = cam.size
@@ -61,16 +74,16 @@ def run(cfg: Config) -> int:
     peace_hold = gestures.HoldDetector(cfg.peace_hold_s, 5.0)
     booth = PhotoBooth(cfg.photo_dir)
     recorder = GifRecorder(cfg.record_gif, cfg.gif_seconds) if cfg.record_gif else None
-    renderer = modes.ModeRenderer()
+    renderer = modes.ModeRenderer(cfg.lite)
 
     mode, style_idx = (cfg.start_mode - 1) % len(modes.NAMES), 0
     show_skeleton, show_stats = True, False
     info_until = 0.0
     toast, toast_t0 = None, -99.0
-    stats_text, stats_t = None, -1.0
+    stats_text, stats_t, stats_runs = None, -1.0, 0
     fps, last_t = 0.0, time.perf_counter()
     t0 = last_hand_t = last_t
-    bench = defaultdict(lambda: [0, 0.0, 0.0])  # hands -> [frames, seconds, tracking ms]
+    bench = defaultdict(lambda: [0, 0.0, 0, 0.0])  # hands -> [frames, s, results, tracking ms]
     exit_code, reason = 0, "unknown"
     frame_no = 0
 
@@ -97,10 +110,17 @@ def run(cfg: Config) -> int:
                 fps = 1.0 / dt if fps == 0 else 0.9 * fps + 0.1 / dt
             k = frame.shape[0] / 480.0
 
-            t_a = time.perf_counter()
-            hands = tracker.detect(frame, int(t * 1000))[:cfg.max_hands]
-            track_ms = (time.perf_counter() - t_a) * 1000
-            infos = players.update(hands, frame.shape)
+            # Hand the frame to the tracker thread, then take its newest result. Gestures
+            # (pinch clicks, fists, ...) are worked out once per result; between results
+            # the predictor only moves the hands.
+            tracker.submit(frame.copy(), int(t * 1000), frame_no)
+            res = tracker.wait(frame_no, cfg.track_wait_ms / 1000)
+            fresh = res is not None and res.seq != used_seq
+            if fresh:
+                used_seq, track_ms = res.seq, res.ms
+                predictor.observe(players.update(res.hands[:cfg.max_hands], frame.shape), res.seq)
+            new_clicks = players.clicks if fresh else []
+            infos = predictor.predict(frame_no)
             if infos:
                 last_hand_t = now
             CONTEXT.update(frame=frame_no, t=f"{t:.1f}s", mode=modes.NAMES[mode],
@@ -126,7 +146,7 @@ def run(cfg: Config) -> int:
 
             byid = {h.id: h for h in infos}
             fists = [h for h in fx_infos if h.fist]
-            clicks = [c for c in players.clicks if c not in busy_ids]
+            clicks = [c for c in new_clicks if c not in busy_ids]
             clear = clear_hold.update(bool(fists) and mode == modes.NEON, now)
             if mode == modes.STYLES and clicks:
                 step = sum(-1 if byid[c].label == "Left" else 1 for c in clicks)
@@ -178,7 +198,10 @@ def run(cfg: Config) -> int:
             if mode != prev_mode:
                 show_toast(modes.NAMES[mode], now)
             if show_stats and (now - stats_t > 0.5 or stats_text is None):
-                stats_text, stats_t = f"{fps:.0f} fps   {track_ms:.0f} ms   {len(infos)} hands", now
+                rate = (tracker.runs - stats_runs) / max(now - stats_t, 1e-3) if stats_t > 0 else 0
+                stats_runs = tracker.runs
+                stats_text, stats_t = (f"{fps:.0f} fps   {rate:.0f} tracks/s   {track_ms:.0f} ms   "
+                                       f"{len(infos)} hands"), now
             peace_p = peace_hold.progress(now)
             hud = UIState(
                 mode=mode, names=names, t=t, kiosk=cfg.kiosk, toast=toast, toast_t0=toast_t0,
@@ -216,7 +239,9 @@ def run(cfg: Config) -> int:
             if cfg.benchmark is not None and now - t0 > BENCH_WARMUP:
                 bench_n[0] += 1
                 bench_n[1] += dt
-                bench_n[2] += track_ms
+                if fresh:
+                    bench_n[2] += 1
+                    bench_n[3] += res.ms
                 if now - t0 > BENCH_WARMUP + cfg.benchmark:
                     reason = "benchmark finished"
                     break
@@ -276,13 +301,19 @@ def run(cfg: Config) -> int:
     if cfg.benchmark is not None and frames:
         secs = sum(v[1] for v in bench.values())
         w, h = cam.size
-        print(f"Benchmark: {frames / secs:.1f} FPS average, "
-              f"{sum(v[2] for v in bench.values()) / frames:.1f} ms tracking average, "
-              f"{w}x{h}, {cfg.benchmark:.0f} s, up to {cfg.max_hands} hands")
+        runs = sum(v[2] for v in bench.values())
+        print(f"Benchmark: {w}x{h}, {cfg.benchmark:.0f} s, up to {cfg.max_hands} hands"
+              f"{', Pi profile' if cfg.pi else ''}, tracking wait {cfg.track_wait_ms:g} ms")
+        if cam.fps is not None:
+            print(f"  camera:          {cam.fps:5.1f} FPS delivered (the display cannot beat this)")
+        print(f"  display/effects: {frames / secs:5.1f} FPS")
+        print(f"  hand tracking:   {runs / secs:5.1f} results/s, "
+              f"{sum(v[3] for v in bench.values()) / max(runs, 1):5.1f} ms per result")
         for n in sorted(bench):
-            f, s, ms = bench[n]
+            f, s, r, ms = bench[n]
             if f:
-                print(f"  {n} hands: {f / s:5.1f} FPS, {ms / f:5.1f} ms tracking ({f} frames)")
+                print(f"  {n} hands: {f / s:5.1f} FPS display, {r / s:5.1f} results/s, "
+                      f"{ms / max(r, 1):5.1f} ms tracking ({f} frames)")
     return exit_code
 
 

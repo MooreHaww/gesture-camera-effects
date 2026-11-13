@@ -1,5 +1,5 @@
 """Turns raw tracked hands into per-hand state: stable id, colour, openness, speed."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -118,3 +118,74 @@ class Players:
         if self.swap_labels:
             return "Left" if hand.label == "Right" else "Right"
         return hand.label
+
+
+class HandPredictor:
+    """Moves hands between tracker results so effects stay smooth on a slow tracker.
+
+    Time is counted in camera frames. Each hand keeps its landmark velocity (pixels per
+    frame) from its last two results and is carried forward along it on frames with no
+    new result, for at most MAX_AHEAD frames, so a stalled tracker makes the hand stop
+    rather than fly off. A new result is eased in over a couple of frames (BLEND) instead
+    of snapping, which hides the small jump when the guess was off.
+
+    Only positions move. Pinch, fist and openness come from the tracker result, and so
+    do pinch clicks, which the main loop takes once per result. When every frame has its
+    own result (a PC), hands pass through untouched.
+    """
+
+    MAX_AHEAD = 4         # frames a hand may be carried forward (about 130 ms at 30 fps)
+    MAX_SPEED = 0.6       # palm sizes per frame; faster is a tracking jump, not motion
+    STILL = 0.015         # palm sizes per frame; slower counts as still (hides jitter)
+    BLEND = 0.5           # share of the gap to the new estimate closed each frame
+
+    def __init__(self):
+        self.infos: list[HandInfo] = []
+        self.seq = None
+        self.gap = 1                      # frames between the last two results
+        self._last: dict = {}             # id -> (seq, landmarks)
+        self._v: dict = {}                # id -> (21, 2) landmark velocity, px per frame
+        self._shown: dict = {}            # id -> (seq, landmarks drawn on that frame)
+
+    def observe(self, infos: list[HandInfo], seq: int):
+        """A new tracker result, for camera frame number `seq`."""
+        vel = {}
+        for h in infos:
+            last = self._last.get(h.id)
+            if last is None or not 0 < seq - last[0] <= 3 * self.MAX_AHEAD:
+                continue
+            v = (h.lm - last[1]) / (seq - last[0])
+            speed = float(np.mean(np.hypot(v[:, 0], v[:, 1]))) / h.palm_r
+            if self.STILL <= speed <= self.MAX_SPEED:
+                vel[h.id] = v
+        self._v = vel
+        self._last = {h.id: (seq, h.lm.copy()) for h in infos}
+        self.gap = 1 if self.seq is None else max(1, seq - self.seq)
+        self.infos, self.seq = infos, seq
+
+    def predict(self, seq: int) -> list[HandInfo]:
+        """Hands as they should be at camera frame `seq`."""
+        if self.seq is None:
+            return []
+        ahead = min(seq - self.seq, self.MAX_AHEAD)
+        out, shown = [], {}
+        for h in self.infos:
+            # HandInfo.vel is per tracker result; effects expect it per camera frame
+            vel = h.vel if self.gap == 1 else h.vel / self.gap
+            if ahead <= 0 and self.gap == 1:      # this frame's own result: as tracked
+                out.append(h)
+                shown[h.id] = (seq, h.lm)
+                continue
+            v = self._v.get(h.id)
+            lm = h.lm + v * max(ahead, 0) if v is not None else h.lm
+            prev = self._shown.get(h.id)
+            if prev is not None and prev[0] == seq - 1:   # ease from last frame's hand
+                expect = prev[1] + (v if v is not None else 0)
+                lm = expect + self.BLEND * (lm - expect)
+            lm = lm.astype(h.lm.dtype)
+            shown[h.id] = (seq, lm)
+            out.append(replace(h, lm=lm, mid=gestures.pinch_midpoint(lm),
+                               palm=(lm[gestures.WRIST] + lm[gestures.MIDDLE_MCP]) / 2,
+                               tips=lm[[4, 8, 12, 16, 20]], vel=vel))
+        self._shown = shown
+        return out

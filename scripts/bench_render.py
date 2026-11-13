@@ -4,7 +4,9 @@ Measures the cost of the player logic, the effect and the HUD per frame, so you
 can see how effects scale with the number of hands. It does not include camera
 capture or hand tracking; use `python -m gesture_fx --benchmark 30` for those.
 
-    python scripts/bench_render.py [--frames 90] [--hands 1 2 4 6]
+    python scripts/bench_render.py [--frames 90] [--hands 1 2 4 6] [--lite]
+
+--lite times the Raspberry Pi profile (fewer particles, lighter heavy styles).
 """
 import argparse
 import sys
@@ -53,17 +55,18 @@ def main():
     ap.add_argument("--frames", type=int, default=90)
     ap.add_argument("--hands", type=int, nargs="+", default=[1, 2, 4, 6])
     ap.add_argument("--size", type=int, nargs=2, default=[640, 480], metavar=("W", "H"))
+    ap.add_argument("--lite", action="store_true", help="the Raspberry Pi profile")
     a = ap.parse_args()
     w, h = a.size
     rng = np.random.default_rng(0)
     base = cv2.resize((rng.random((12, 16, 3)) * 200 + 30).astype("uint8"), (w, h))
 
-    print(f"Render cost in ms per frame at {w}x{h} (lower is better)")
+    print(f"Render cost in ms per frame at {w}x{h}{', Pi profile' if a.lite else ''} (lower is better)")
     print(f"{'mode':<13}" + "".join(f"{n:>8} hands" for n in a.hands))
     for mode, name in enumerate(modes.NAMES):
         row = f"{name:<13}"
         for n in a.hands:
-            players, renderer, ui = Players(Config()), modes.ModeRenderer(), UI()
+            players, renderer, ui = Players(Config()), modes.ModeRenderer(a.lite), UI()
             total = 0.0
             for step in range(a.frames + 10):
                 t0 = time.perf_counter()

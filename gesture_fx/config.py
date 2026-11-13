@@ -5,6 +5,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = ROOT / "models" / "hand_landmarker.task"
+PI_MAX_HANDS = 2
+PC_TRACK_WAIT_MS = 20.0   # a PC tracks in about 8 ms: every frame gets its own hands
+
+
+def is_raspberry_pi() -> bool:
+    """True on a Raspberry Pi (Linux reports the board model in the device tree)."""
+    for path in ("/proc/device-tree/model", "/sys/firmware/devicetree/base/model"):
+        try:
+            return "raspberry pi" in Path(path).read_text(errors="ignore").lower()
+        except OSError:
+            continue
+    return False
 
 
 @dataclass
@@ -38,6 +50,11 @@ class Config:
     spread_closed: float = 0.8
     spread_open: float = 1.8
     smooth_alpha: float = 0.5
+    # Raspberry Pi profile (--pi, or detected): fewer hands, lighter effects, and the
+    # picture never waits for the tracker
+    pi: bool = False
+    lite: bool = False           # lower particle caps, lighter heavy styles and effects
+    track_wait_ms: float = PC_TRACK_WAIT_MS  # longest wait for a frame's own hands
 
 
 def parse_args(argv=None) -> Config:
@@ -53,10 +70,11 @@ def parse_args(argv=None) -> Config:
                    help="run for N seconds, print average FPS, exit")
     p.add_argument("--no-display", action="store_true",
                    help="do not open a window (useful with --benchmark)")
-    p.add_argument("--max-hands", type=int, default=4,
-                   help="most hands tracked at once (more hands cost more CPU)")
+    p.add_argument("--max-hands", type=int, default=None,
+                   help=f"most hands tracked at once (default 4, {PI_MAX_HANDS} on a Pi; "
+                        "more hands cost more CPU)")
     p.add_argument("--kiosk", action="store_true",
-                   help="event mode: fullscreen, hidden cursor, large hint text")
+                   help="event mode: fullscreen, hidden cursor, larger UI")
     p.add_argument("--photo-dir", type=Path, default=ROOT / "photos",
                    help="where photos are saved (keep it out of git)")
     p.add_argument("--swap-hands", action="store_true",
@@ -73,12 +91,24 @@ def parse_args(argv=None) -> Config:
                    help="small logo image (PNG with transparency works best) shown with --brand")
     p.add_argument("--attract-after", type=float, default=6.0, metavar="SECONDS",
                    help="show the how-to screen after this long without a hand")
+    pi = p.add_mutually_exclusive_group()
+    pi.add_argument("--pi", action="store_true",
+                    help="Raspberry Pi profile (on by itself on a Pi): fewer hands, lighter "
+                         "effects, the picture never waits for hand tracking")
+    pi.add_argument("--no-pi", action="store_true", help="do not use the Pi profile on a Pi")
+    p.add_argument("--track-wait", type=float, default=None, metavar="MS",
+                   help=f"longest wait for the hands of the current frame before carrying "
+                        f"the last ones forward (default {PC_TRACK_WAIT_MS:g}, 0 on a Pi)")
     a = p.parse_args(argv)
+    on_pi = a.pi or (not a.no_pi and is_raspberry_pi())
     return Config(camera=a.camera, width=a.width, height=a.height,
                   mirror=not a.no_mirror, model_path=a.model,
                   record_gif=a.record_gif, gif_seconds=a.gif_seconds,
                   benchmark=a.benchmark, no_display=a.no_display,
-                  max_hands=a.max_hands, kiosk=a.kiosk, swap_hands=a.swap_hands, photo_dir=a.photo_dir,
+                  max_hands=a.max_hands or (PI_MAX_HANDS if on_pi else 4), kiosk=a.kiosk, swap_hands=a.swap_hands, photo_dir=a.photo_dir,
                   attract_after=a.attract_after, start_mode=a.mode,
                   switch_hold_s=a.switch_hold, square_pad=not a.no_square_pad,
-                  brand=(a.brand or "").strip() or None, logo=a.logo)
+                  brand=(a.brand or "").strip() or None, logo=a.logo,
+                  pi=on_pi, lite=on_pi,
+                  track_wait_ms=a.track_wait if a.track_wait is not None
+                  else (0.0 if on_pi else PC_TRACK_WAIT_MS))

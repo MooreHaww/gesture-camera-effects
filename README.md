@@ -75,19 +75,22 @@ python -m gesture_fx --mode 4                # start in neon draw
 python -m gesture_fx --max-hands 2           # track fewer hands, faster
 python -m gesture_fx --brand "Some Club" --logo logo.png   # name and logo in a corner
 python -m gesture_fx --record-gif photos/demo.gif --gif-seconds 8   # git-ignored
-python -m gesture_fx --benchmark 30          # run 30 s, print average FPS and tracking ms
+python -m gesture_fx --benchmark 30          # run 30 s, print display FPS and tracking rate
+python -m gesture_fx --pi                    # Raspberry Pi profile (automatic on a Pi)
 python -m gesture_fx --help                  # every flag
 ```
 
 | Flag | What it does |
 |------|--------------|
 | `--kiosk` | Fullscreen, hidden cursor, larger UI |
-| `--max-hands N` | Most hands tracked at once (default 4; fewer is faster) |
+| `--max-hands N` | Most hands tracked at once (default 4, 2 on a Pi; fewer is faster) |
 | `--mode 1-10` | Mode to start in (mode 10 is on key 0) |
 | `--brand NAME` | Show a name in a glass badge in the top-left corner; nothing is shown by default |
 | `--logo IMAGE` | Show a logo in the badge next to the `--brand` name |
 | `--record-gif PATH` | 3 s countdown, record `--gif-seconds` of the screen, save the GIF and exit |
-| `--benchmark SECONDS` | Run for that long, then print average FPS and tracking time per hand count |
+| `--benchmark SECONDS` | Run for that long, then print the camera FPS, display/effects FPS, tracking results per second and tracking time, per hand count |
+| `--pi`, `--no-pi` | Turn the Raspberry Pi profile on, or off on a Pi (it is detected by itself) |
+| `--track-wait MS` | Longest wait for the current frame's hands before carrying the last ones forward (default 20, 0 on a Pi) |
 | `--camera`, `--width`, `--height` | Camera index and requested resolution |
 | `--switch-hold SECONDS` | How long a fingertip must stay on NEXT or PREVIOUS (default 1.5) |
 | `--no-mirror`, `--swap-hands` | Turn off the mirror image; swap left and right hands |
@@ -105,6 +108,44 @@ python -m gesture_fx --help                  # every flag
 | d | Save a landmark check image to `debug/` |
 | q or Esc | Quit |
 
+## Raspberry Pi 5
+
+The same code runs on a Raspberry Pi 5 (64-bit Raspberry Pi OS, CPU only). The Pi is
+detected by itself and switches on a lighter profile (`--pi` forces it on another
+machine, `--no-pi` turns it off):
+
+- Up to 2 hands instead of 4 (`--max-hands` still overrides it).
+- The picture never waits for hand tracking. Tracking takes about 60 ms on the Pi, so
+  it runs on its own thread on the newest frame while the effects keep the camera's
+  30 FPS; between tracking results each hand is carried forward along its recent
+  motion for at most 4 frames.
+- Lighter effects: the four costliest styles (cartoon, comic, oil paint, neon glow)
+  run at half size, time echo keeps 3 ghosts instead of 5, and particle caps are about
+  halved (fireworks, bubbles, energy ball, storm, hands on fire, neon draw points).
+
+Install v4l-utils as well:
+
+```
+sudo apt install v4l-utils
+```
+
+Many webcams lower their frame rate in dim light to expose longer (a Logitech C920s
+drops to about 15 FPS). On Linux the app asks the camera for MJPG at 30 FPS and turns
+that off at startup with `v4l2-ctl --set-ctrl=exposure_dynamic_framerate=0`; without
+v4l-utils, or on a camera without that control, it skips this step. The frame rate the
+camera really delivers is printed at startup and in the benchmark.
+
+To measure on the Pi, with your hands in view for part of the run:
+
+```
+python -m gesture_fx --benchmark 30 --no-display
+python -m gesture_fx --benchmark 30 --kiosk
+python scripts/bench_render.py --lite --hands 1 2
+```
+
+The first gives the camera, effects and tracking numbers without a window; the second
+includes drawing to the screen; the third times each mode's effects alone.
+
 ## How it works
 
 ```
@@ -113,10 +154,10 @@ camera -> tracking -> players -> mode -> UI -> window
 
 | Module | Job |
 |--------|-----|
-| `camera.py` | Capture on a background thread that always hands back the newest frame |
-| `tracking.py` | MediaPipe hand landmarks; the only module that imports MediaPipe |
+| `camera.py` | Capture on a background thread that always hands back the newest frame; MJPG at 30 FPS |
+| `tracking.py` | MediaPipe hand landmarks on their own thread; the only module that imports MediaPipe |
 | `gestures.py` | Pure NumPy gesture math, no OpenCV or MediaPipe, fully unit tested |
-| `players.py` | Turns raw hands into per-hand state: stable id, colour, openness, speed |
+| `players.py` | Turns raw hands into per-hand state (stable id, colour, openness, speed) and carries hands forward between tracking results |
 | `modes.py`, `playful.py`, `effects.py`, `fxkit.py` | The ten modes and the effects they draw |
 | `buttons.py` | NEXT, PREVIOUS and info buttons pressed by a fingertip |
 | `photobooth.py`, `recorder.py` | Photo countdown and saving; GIF recording |

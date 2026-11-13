@@ -65,9 +65,17 @@ def _cells_up(a, cell, h, w):
     return up[:h, :w]
 
 
-def apply_style(frame: np.ndarray, name: str, t: float = 0.0) -> np.ndarray:
+# The styles that cost over 1 ms at 640x480 on a PC; lite mode (the Pi) runs them at
+# half size, which makes them 2 to 3 times cheaper.
+HEAVY_STYLES = {"cartoon", "comic", "oil paint", "neon glow"}
+
+
+def apply_style(frame: np.ndarray, name: str, t: float = 0.0, lite: bool = False) -> np.ndarray:
     """Restyle a picture. Every style is a few cheap OpenCV passes."""
     h, w = frame.shape[:2]
+    if lite and name in HEAVY_STYLES and min(h, w) >= 64:
+        small = cv2.resize(frame, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+        return cv2.resize(apply_style(small, name, t), (w, h), interpolation=cv2.INTER_LINEAR)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     if name == "cartoon":
         quant = (frame // 48) * 48 + 24
@@ -182,7 +190,7 @@ def lens(frame: np.ndarray, center, radius: float, colour=(255, 255, 255),
 
 
 def portal(frame: np.ndarray, quad, style: str, colours=((255, 255, 255),) * 2,
-           t: float = 0.0) -> np.ndarray:
+           t: float = 0.0, lite: bool = False) -> np.ndarray:
     """Styled picture inside a quadrilateral through four fingertips, with glowing edges.
 
     quad is ordered [A thumb, A index, B index, B thumb]. A polygon mask is much
@@ -199,7 +207,7 @@ def portal(frame: np.ndarray, quad, style: str, colours=((255, 255, 255),) * 2,
         roi = frame[y0:y1, x0:x1]
         mask = np.zeros(roi.shape[:2], np.uint8)
         cv2.fillPoly(mask, [pts - (x0, y0)], 255)
-        np.copyto(out[y0:y1, x0:x1], apply_style(roi, style, t), where=mask[..., None] > 0)
+        np.copyto(out[y0:y1, x0:x1], apply_style(roi, style, t, lite), where=mask[..., None] > 0)
 
     ca, cb = colours
     edge = [ca, mix_col(ca, cb), cb, mix_col(ca, cb)]

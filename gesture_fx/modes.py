@@ -27,7 +27,8 @@ def frame_quad(infos):
 class ModeRenderer:
     """Applies the selected mode to a frame and owns the state of stateful modes."""
 
-    def __init__(self):
+    def __init__(self, lite: bool = False):
+        self.lite = lite
         self.neon = playful.NeonDraw()
         self.fireworks = playful.Fireworks()
         self.bubbles = playful.Bubbles()
@@ -38,10 +39,25 @@ class ModeRenderer:
         self._stateful = {ECHO: self.echo, NEON: self.neon, FIREWORKS: self.fireworks,
                           BUBBLES: self.bubbles, ENERGY: self.energy, STORM: self.storm,
                           FIRE: self.fire}
+        if lite:
+            self._lighten()
         self._last_mode = None
         self._style = None
         self._prev_style = None
         self._style_t = -99.0
+
+    def _lighten(self):
+        """Raspberry Pi profile: roughly half the particles and lighter heavy effects."""
+        self.fireworks.ps.cap = 800       # from 1800
+        self.bubbles.ps.cap = 200         # from 400
+        self.energy.ps.cap = 350          # from 700
+        self.fire.flames.cap = 450        # from 900
+        self.fire.embers.cap = 200        # from 500
+        self.storm.N = 180                # from 320 falling sparks
+        self.neon.MAX_POINTS = 3000       # from 6000 stroke points
+        self.echo.DELAYS = (5, 10, 15)    # 3 ghosts instead of 5
+        self.echo.ALPHAS = (0.66, 0.46, 0.28)
+        self.echo.reset()
 
     def reset_mode(self, mode: int):
         """Throw away a mode's state, e.g. after it raised an error."""
@@ -63,7 +79,7 @@ class ModeRenderer:
             if fq is None:
                 return frame
             quad, a, b = fq
-            return effects.portal(frame, quad, style, (a.color, b.color), t)
+            return effects.portal(frame, quad, style, (a.color, b.color), t, self.lite)
         if mode == STYLES:
             return self._styled(frame, style, t)
         if mode == LENS:
@@ -96,9 +112,9 @@ class ModeRenderer:
             self._style = style
         if style != self._style:
             self._prev_style, self._style, self._style_t = self._style, style, t
-        cur = effects.apply_style(frame, style, t)
+        cur = effects.apply_style(frame, style, t, self.lite)
         a = (t - self._style_t) / STYLE_FADE_S
         if self._prev_style is not None and 0 <= a < 1:
-            prev = effects.apply_style(frame, self._prev_style, t)
+            prev = effects.apply_style(frame, self._prev_style, t, self.lite)
             return cv2.addWeighted(prev, 1 - a, cur, a, 0)
         return cur
