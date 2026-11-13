@@ -1,0 +1,7 @@
+# Versions tested on Windows 11 with Python 3.12.
+# mediapipe pulls in opencv-contrib-python; installing opencv-python as well would give
+# two packages that both provide cv2, so only the contrib build is listed.
+mediapipe==1.2.3
+opencv-contrib-python==5.0.0.93
+numpy==2.5.4
+Pillow==13.0.0

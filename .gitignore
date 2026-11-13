@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+models/
+crash.log
+# Photos of people: never commit these
+photos/
+# Debug images (may show faces): never commit
+debug/
+# Only generated images go in docs/; camera footage stays out
+docs/*.png
+docs/*.jpg
+docs/*.jpeg
+docs/*.gif
+docs/*.mp4
+docs/*.webm
+!docs/modes.png
