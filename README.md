@@ -91,7 +91,8 @@ python -m gesture_fx --help                  # every flag
 | `--benchmark SECONDS` | Run for that long, then print the camera FPS, display/effects FPS, tracking results per second and tracking time, per hand count |
 | `--pi`, `--no-pi` | Turn the Raspberry Pi profile on, or off on a Pi (it is detected by itself) |
 | `--track-wait MS` | Longest wait for the current frame's hands before carrying the last ones forward (default 20, 0 on a Pi) |
-| `--camera`, `--width`, `--height` | Camera index and requested resolution |
+| `--camera`, `--width`, `--height` | Camera index (skips the picker and the saved choice) and requested resolution |
+| `--self-test` | Load the model, track a blank frame, check the fonts, list the cameras, write the result to `crash.log`, exit |
 | `--switch-hold SECONDS` | How long a fingertip must stay on NEXT or PREVIOUS (default 1.5) |
 | `--no-mirror`, `--swap-hands` | Turn off the mirror image; swap left and right hands |
 
@@ -99,7 +100,8 @@ python -m gesture_fx --help                  # every flag
 |-----|--------|
 | 1 to 9, 0 | Choose a mode (0 is mode 10) |
 | p | Photo |
-| c | Clear neon drawing |
+| c | Next camera (saved in `settings.json` on Windows) |
+| x | Clear neon drawing |
 | i | Show or hide the info card |
 | v | Show or hide FPS and tracking time |
 | f | Fullscreen on or off |
@@ -107,6 +109,30 @@ python -m gesture_fx --help                  # every flag
 | s | Save a screenshot to `debug/` (git-ignored) |
 | d | Save a landmark check image to `debug/` |
 | q or Esc | Quit |
+
+## Cameras on Windows
+
+At startup the app lists the DirectShow cameras. With more than one and no saved
+choice it shows a picker with a live picture of each (click, number keys, or arrows and
+Enter). The choice is saved in `settings.json`, matched by camera name so it survives a
+different USB port; if that camera is missing the picker comes back. `c` switches to
+the next camera while running. No camera, or a camera another app is using, gives an
+on-screen message that keeps retrying. `--camera N` overrides all of this. On Linux
+and the Pi startup opens `--camera` or index 0 as before.
+
+## Portable Windows build
+
+```
+pip install -r requirements-dev.txt
+python scripts/build_portable.py
+```
+
+This builds `dist/GestureFX/` with PyInstaller (one-folder): `GestureFX.exe`, the model,
+fonts and MediaPipe files inside `_internal/`, plus `Start.bat`, `Start_Kiosk.bat` and
+`README_PORTABLE.txt` (sources in `scripts/portable/`). Copy the whole folder to a USB
+stick; the other laptop needs no Python. Photos, `debug/`, `crash.log` and
+`settings.json` are written next to the exe, or to `%TEMP%\GestureFX` with a notice
+when that folder is read-only.
 
 ## Raspberry Pi 5
 
@@ -163,6 +189,8 @@ camera -> tracking -> players -> mode -> UI -> window
 | `photobooth.py`, `recorder.py` | Photo countdown and saving; GIF recording |
 | `ui.py`, `display.py` | On-screen UI and the scaled window |
 | `app.py`, `config.py` | Main loop and command-line flags |
+| `cameras.py`, `camscreen.py` | Camera list (DirectShow names), the picker and the camera messages |
+| `paths.py`, `settings.py` | Where files are read and written (source or portable build); `settings.json` |
 
 Because the main loop only sees plain frames and hand objects, moving to a different
 camera or tracker touches one file.

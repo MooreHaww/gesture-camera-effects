@@ -16,3 +16,8 @@ docs/*.gif
 docs/*.mp4
 docs/*.webm
 !docs/modes.png
+# Portable build output and per-machine settings
+build/
+dist/
+settings.json
+settings.tmp

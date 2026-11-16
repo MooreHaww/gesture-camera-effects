@@ -12,9 +12,9 @@ import threading
 import traceback
 from datetime import datetime
 
-from .config import ROOT
+from .paths import DATA_DIR
 
-LOG_PATH = ROOT / "crash.log"
+LOG_PATH = DATA_DIR / "crash.log"
 _fh = None
 _seen: dict = {}
 

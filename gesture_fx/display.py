@@ -1,8 +1,12 @@
 """Resizable window that scales the frame up with the correct aspect ratio."""
 import sys
+import time
 
 import cv2
 import numpy as np
+
+
+FULLSCREEN_SETTLE_S = 1.0   # the window may blink invisible this long after a switch
 
 
 def fit_transform(w: int, h: int, win_w: int, win_h: int):
@@ -92,21 +96,36 @@ class Display:
 
     def present(self, canvas: np.ndarray):
         cv2.imshow(self.title, canvas)
+        if not self._shown:   # startup time can be read off crash.log
+            self._shown = True
+            from . import crashlog
+            crashlog.write("First picture in the window")
 
     def toggle_fullscreen(self):
+        self._toggled_t = time.perf_counter()
         self.fullscreen = not self.fullscreen
         cv2.setWindowProperty(
             self.title, cv2.WND_PROP_FULLSCREEN,
             cv2.WINDOW_FULLSCREEN if self.fullscreen else cv2.WINDOW_NORMAL)
 
     def closed(self) -> bool:
-        """True once the window has been closed (needs 3 checks in a row, so a brief
-        glitch while switching fullscreen cannot end the app)."""
+        """True once the window has been closed.
+
+        One check is enough: the next imshow would quietly open the window again, so
+        the window is never "gone" twice in a row. Only within a second of switching
+        fullscreen, when the window can blink invisible, 3 checks in a row are needed.
+        """
         try:
             gone = cv2.getWindowProperty(self.title, cv2.WND_PROP_VISIBLE) < 1
         except cv2.error:
             gone = True
-        self._gone = self._gone + 1 if gone else 0
-        return self._gone >= 3
+        if not gone:
+            self._gone = 0
+            return False
+        self._gone += 1
+        settling = time.perf_counter() - self._toggled_t < FULLSCREEN_SETTLE_S
+        return self._gone >= 3 or not settling
 
     _gone = 0
+    _toggled_t = -1e9
+    _shown = False

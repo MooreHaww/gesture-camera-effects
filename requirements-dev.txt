@@ -1,2 +1,5 @@
 -r requirements.txt
 pytest==9.2.0
+# Portable Windows build (scripts/build_portable.py)
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.10

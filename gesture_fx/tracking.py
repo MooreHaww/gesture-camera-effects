@@ -46,7 +46,9 @@ class HandTracker:
             raise FileNotFoundError(
                 f"{model_path} not found. Run: python scripts/download_model.py")
         options = vision.HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=str(model_path),
+            # Read as bytes: MediaPipe's own file loading trips over some Windows paths
+            # (non-ASCII folder names), and a copy on a USB stick can live anywhere
+            base_options=BaseOptions(model_asset_buffer=Path(model_path).read_bytes(),
                                      delegate=BaseOptions.Delegate.CPU),
             running_mode=vision.RunningMode.VIDEO,
             num_hands=num_hands,

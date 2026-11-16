@@ -3,8 +3,12 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_MODEL = ROOT / "models" / "hand_landmarker.task"
+from .paths import DATA_DIR, RESOURCE_DIR
+
+# Project folder from source; in the portable build the folder of GestureFX.exe. Files
+# the app writes go in DATA_DIR (the same folder unless it is read-only).
+ROOT = DATA_DIR
+DEFAULT_MODEL = RESOURCE_DIR / "models" / "hand_landmarker.task"
 PI_MAX_HANDS = 2
 PC_TRACK_WAIT_MS = 20.0   # a PC tracks in about 8 ms: every frame gets its own hands
 
@@ -21,7 +25,7 @@ def is_raspberry_pi() -> bool:
 
 @dataclass
 class Config:
-    camera: int = 0
+    camera: int | None = None    # None: the saved or picked camera (index 0 off Windows)
     width: int = 640
     height: int = 480
     mirror: bool = True
@@ -55,11 +59,13 @@ class Config:
     pi: bool = False
     lite: bool = False           # lower particle caps, lighter heavy styles and effects
     track_wait_ms: float = PC_TRACK_WAIT_MS  # longest wait for a frame's own hands
+    self_test: bool = False      # check the model, fonts and cameras, then exit
 
 
 def parse_args(argv=None) -> Config:
     p = argparse.ArgumentParser(prog="gesture_fx", description="Gesture Camera Effects")
-    p.add_argument("--camera", type=int, default=0, help="camera index")
+    p.add_argument("--camera", type=int, default=None,
+                   help="camera index; skips the camera picker and the saved choice")
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=480)
     p.add_argument("--no-mirror", action="store_true", help="do not flip the image")
@@ -99,6 +105,9 @@ def parse_args(argv=None) -> Config:
     p.add_argument("--track-wait", type=float, default=None, metavar="MS",
                    help=f"longest wait for the hands of the current frame before carrying "
                         f"the last ones forward (default {PC_TRACK_WAIT_MS:g}, 0 on a Pi)")
+    p.add_argument("--self-test", action="store_true",
+                   help="load the model, track a blank frame, check the fonts, list the "
+                        "cameras, write the result to crash.log and exit")
     a = p.parse_args(argv)
     on_pi = a.pi or (not a.no_pi and is_raspberry_pi())
     return Config(camera=a.camera, width=a.width, height=a.height,
@@ -111,4 +120,5 @@ def parse_args(argv=None) -> Config:
                   brand=(a.brand or "").strip() or None, logo=a.logo,
                   pi=on_pi, lite=on_pi,
                   track_wait_ms=a.track_wait if a.track_wait is not None
-                  else (0.0 if on_pi else PC_TRACK_WAIT_MS))
+                  else (0.0 if on_pi else PC_TRACK_WAIT_MS),
+                  self_test=a.self_test)

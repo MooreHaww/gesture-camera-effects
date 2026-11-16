@@ -45,12 +45,17 @@ def fixed_frame_rate(index: int) -> str | None:
     return None
 
 
+class CameraError(RuntimeError):
+    """The camera could not be opened (missing, busy, or blocked by privacy settings)."""
+
+
 class Camera:
     def __init__(self, index: int = 0, width: int = 640, height: int = 480):
         self.index, self.width, self.height = index, width, height
         self.cap = self._open()
         if not self.cap.isOpened():
-            raise RuntimeError(f"Could not open camera index {index}")
+            self.cap.release()
+            raise CameraError(f"Could not open camera index {index}")
         self._frame = None
         self.fps = None    # frame rate really delivered, measured over the first MEASURE_S
         self._seq = 0
@@ -127,6 +132,12 @@ class Camera:
                 self._frame = frame
                 self._seq += 1
                 self._cond.notify_all()
+
+    def wait_first(self, timeout: float) -> bool:
+        """True once the first frame has arrived. On Windows a camera that another app
+        is using (or that camera privacy blocks) often opens fine but never delivers."""
+        with self._cond:
+            return self._cond.wait_for(lambda: self._seq > 0, timeout)
 
     def read(self, timeout: float = 5.0):
         """Block until a frame newer than the last one returned is available."""
